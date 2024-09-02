@@ -1,0 +1,14 @@
+model:
+  checkpoint: "facebook/wav2vec2-base-960h"
+
+onnx_parameters:
+  model_path: "output/model.onnx"
+  export_params: True
+  opset_version: 14
+  do_constant_folding: True
+  input_names: ["input"]
+  output_names: ["output"]
+  dynamic_axes: {"input": {1: "audio_len"}, "output": {1: "audio_len"}}
+
+quantization_parameters:
+  model_path: "output/model.quant.onnx"
