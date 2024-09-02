@@ -12,3 +12,6 @@ onnx_parameters:
 
 quantization_parameters:
   model_path: "output/model.quant.onnx"
+
+sqlite3_database:
+  path: 'voice_validation.db'
