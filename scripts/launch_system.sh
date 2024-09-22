@@ -1,0 +1,1 @@
+python3 main.py --config configs/main_config.yaml

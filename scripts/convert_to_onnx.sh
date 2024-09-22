@@ -1,1 +1,1 @@
-python3 onnx_converter.py --config configs/config.yaml --quantize True
+python3 utils/onnx_converter.py --config configs/quantization_config.yaml --quantize True

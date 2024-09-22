@@ -80,9 +80,11 @@ class SecuritySystem:
 
         if not self.VoiceValidator.validate(voice_embedding, user.faiss_index):
             logger.info("User not recognized... Validation failed.")
+            return
 
         if not self.validate_passphrase(passphrase_transcription, user.passphrase):
             logger.info("Passphrase not recognized... Validation failed.")
+            return
         
         logger.info("User was successfully validated.")
 
