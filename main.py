@@ -1,113 +1,180 @@
-import difflib
 import warnings
+import argparse
+import sounddevice as sd
+import numpy as np
+import Levenshtein
+import textwrap
+import concurrent.futures
 
-from asr import QuantizedWave2Vec2ForCTC
-from validate_voice import VoiceValidator
-from databases.faiss_database import FaissDatabase
-from databases.sqlite3_database import SQLite3Database
+from core.asr_model import QuantizedWave2Vec2ForCTC
+from core.validator import VoiceValidator
+from core.database import FaissDatabase, UserDatabase
+
+from utils.config_utils import load_config
+from utils.logger_utils import get_logger
 
 
+logger = get_logger(__name__)
 warnings.filterwarnings("ignore", category=FutureWarning, module="transformers.tokenization_utils_base")
 
 
 class SecuritySystem:
-    def __init__(self):
-        self.model = QuantizedWave2Vec2ForCTC(
-            "facebook/wav2vec2-base-960h",
-            "output/model.quant.onnx"
-        )
+    def __init__(self, config):
+        self.model = QuantizedWave2Vec2ForCTC(**config["model"])
 
-        self.VoiceValidator = VoiceValidator("output/embeddings.npy")
-        self.faiss_database = FaissDatabase()
-        self.user_database = SQLite3Database("data/users.db")
+        self.faiss_database = FaissDatabase(**config["faiss_db"])
+        self.user_database = UserDatabase(**config["sqlite_db"])
 
-        self.confidence_threshold = 0.85
-        self.passphrase_threshold = 0.7
+        self.VoiceValidator = VoiceValidator(self.faiss_database)
 
-    def create_user(self):
-        name = input("\nPlease say your name: ")
-        surname = input("Please say your surname: ")
-        passphrase = self.voice_to_text("Please say your passphrase: ")
+        self.passphrase_threshold = 0.33
 
-        voice_embedding = self.VoiceValidator.embedd_audio(passphrase)
-        passphrase_transcription, confidence = self.model.predict(passphrase)
+    def register_user(self):
+        """
+        Register a new user by recording their passphrase and storing their voice embedding.
+        """
+        logger.info("Registering user...")
+
+        passphrase = self.get_voice_input("Please say your passphrase: ")
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future_embedding = executor.submit(self.VoiceValidator.embedd_audio, passphrase)
+            future_transcription = executor.submit(self.model.predict, passphrase)
+
+            voice_embedding = future_embedding.result()
+            passphrase_transcription, _ = future_transcription.result()
+
+        logger.info(f"Passphrase: {passphrase_transcription}")
 
         embedding_id = self.faiss_database.add_embedding(voice_embedding)
 
-        self.user_database.execute(
-            f"INSERT INTO users (name, surname, passphrase, faiss_index_id)"
-            f" VALUES ('{name}', '{surname}', '{passphrase_transcription}', {embedding_id})"
-        )
-
-        print(f"\nUser {name} {surname} created with index {embedding_id}.\n")
+        user_id = self.user_database.insert_user(passphrase_transcription, embedding_id)
+        logger.info(f"User registered. User ID: {user_id}")
 
         self.faiss_database.save_index()
 
     def validate_user(self):
-        user_id = input("Please say your id: ")
-        passphrase = self.voice_to_text("Please say your passphrase: ")
+        """
+        Validate a user by recording their passphrase and comparing it with the stored voice embedding.
 
-        user = self.user_database.execute(
-            f"SELECT * FROM users WHERE id = {user_id}", fetch=True
-        )
+        Returns:
+            bool: True if the user is validated, False otherwise
+        """
+        user_id = input("Please write your id: ")
 
-        if user is None or len(user) == 0:
-            return False
+        user = self.user_database.get_user_by_id(user_id)
 
-        print(user)
+        if user is None:
+            logger.info("User not found.")
 
-        voice_embedding = self.VoiceValidator.embedd_audio(passphrase)
-        passphrase_transcription, confidence = self.model.predict(passphrase)
+        passphrase = self.get_voice_input("Please say your passphrase: ")
 
-        if confidence < self.confidence_threshold:
-            print(f"\nConfidence too low. Confidence: {confidence}")
-            return False
+        logger.info("Validating user...")
 
-        distances, indices = self.faiss_database.search_embedding(voice_embedding)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future_embedding = executor.submit(self.VoiceValidator.embedd_audio, passphrase)
+            future_transcription = executor.submit(self.model.predict, passphrase)
 
-        if indices[0][0] != user[0][4]:
-            print("\nVoice not recognized.")
-            return False
+            voice_embedding = future_embedding.result()
+            passphrase_transcription, _ = future_transcription.result()
 
-        if not self.validate_passphrase(passphrase_transcription, user[0][3]):
-            print("\nPassphrase not recognized.")
-            return False
+        if not self.VoiceValidator.validate(voice_embedding, user.faiss_index):
+            logger.info("User not recognized... Validation failed.")
 
-        return True
+        if not self.validate_passphrase(passphrase_transcription, user.passphrase):
+            logger.info("Passphrase not recognized... Validation failed.")
+        
+        logger.info("User was successfully validated.")
 
-    def run(self):
+    def launch(self):
+        """
+        Launch the security system and provide the user with options to register or validate a user.
+        """
+        options = {
+            "1": self.register_user,
+            "2": self.validate_user,
+            "0": lambda: None
+        }
+
         while True:
-            option = input("Security System \n1. Create user\n2. Validate user\nPlease select an option: ")
+            option = input(
+                textwrap.dedent("""\n\
+                    Voice Security System 
+                    1. Register user 
+                    2. Validate user 
+                    0. Exit 
+                    Please select an option: """)
+            )
 
-            if option == "1":
-                self.create_user()
-            elif option == "2":
-                validated = self.validate_user()
+            if option not in options:
+                logger.info("Invalid option. Please try again.")
+                continue
 
-                if validated:
-                    print("User validated.\n")
-                else:
-                    print("User not validated.\n")
-            else:
-                print("Invalid option. Exiting.")
+            if option == "0":
+                logger.info("Exiting...")
                 break
+
+            options[option]()
 
         self.user_database.close()
 
-    def voice_to_text(self, prompt):
-        print(prompt)
-        return input("Path to the audio file: ")
+    def get_voice_input(self, prompt: str, duration: float = 5.0, sample_rate: int = 16000):
+        """
+        Record audio input from the user.
+
+        Args:
+            prompt (str): The prompt message to display to the user.
+            duration (float): The duration in seconds to record audio.
+            sample_rate (int): The sample rate to record audio.
+
+        Returns:
+            np.ndarray: The recorded audio data.
+        """
+        logger.info(prompt)
+
+        logger.info(f"Recording for {duration} seconds...")
+        
+        try:
+            audio_data = sd.rec(
+                int(duration * sample_rate),
+                samplerate=sample_rate,
+                channels=1,
+                dtype='float32'
+            )
+
+            sd.wait()
+            logger.info("Recording finished.")
+
+            audio_data_int16 = np.int16(audio_data * 32767)
+
+            return audio_data_int16.squeeze()
+        except Exception as e:
+            logger.error(f"Error while recording audio: {e}")
+            return None
 
     def validate_passphrase(self, input_passphrase, stored_passphrase):
-        similarity = difflib.SequenceMatcher(None, input_passphrase, stored_passphrase).ratio()
-        print(f"Passphrase similarity: {similarity}")
-        return similarity >= self.passphrase_threshold
+        distance = Levenshtein.distance(input_passphrase, stored_passphrase)
 
+        max_length = max(len(input_passphrase), len(stored_passphrase))
+    
+        if max_length == 0:
+            normalized_distance = 0
+        else:
+            normalized_distance = distance / max_length
 
-def main():
-    security_system = SecuritySystem()
-    security_system.run()
+        logger.info(f"Normalized Levenshtein distance: {normalized_distance}")
+
+        return normalized_distance <= self.passphrase_threshold
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Security System")
+    parser.add_argument("--config", type=str, required=True)
+
+    args = parser.parse_args()
+
+    config = load_config(args.config, logger=logger)
+
+    security_system = SecuritySystem(config)
+
+    security_system.launch()

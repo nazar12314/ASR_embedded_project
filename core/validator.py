@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 
 from resemblyzer import preprocess_wav, VoiceEncoder
 
@@ -24,23 +23,19 @@ class VoiceValidator:
 
         return embedding
 
-    def validate(self, voice_audio):
-        pass
+    def validate(self, audio_embedding: np.ndarray, index_id: int) -> bool:
+        """
+        Validate if the audio embedding is the same as the one in the database
 
+        Args:
+            audio_embedding (np.ndarray): audio embedding
+            index_id (int): index id of the audio embedding in the database
 
-if __name__ == "__main__":
-    # first_file = "audios/rec1.wav"
-    # second_file = "audios/harvard.wav"
-    #
-    # embedding1 = embedd_audio(first_file)
-    # embedding2 = embedd_audio(second_file)
-    #
-    # tensor1 = torch.tensor(embedding1).unsqueeze(0)
-    # tensor2 = torch.tensor(embedding2).unsqueeze(0)
-    #
-    # # Calculate cosine similarity
-    # similarity = torch.nn.functional.cosine_similarity(tensor1, tensor2).item()
-    #
-    # print(similarity)
+        Returns:
+            bool: True if the audio embedding is the same as the one in the database
+        """
+        _, indices = self.embedding_db.search_embedding(audio_embedding)
 
-    pass
+        closest_index = indices[0][0]
+
+        return closest_index == index_id

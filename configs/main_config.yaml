@@ -1,0 +1,10 @@
+model:
+  checkpoint_name: "facebook/wav2vec2-large-960h"
+  model_path: "output/models/wav2vec2-large-960h.quant.onnx"
+
+faiss_db:
+  index_path: "output/database/faiss_index.bin"
+  dimension: 256
+
+sqlite_db:
+  db_path: "output/database/users.db"
