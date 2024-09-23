@@ -5,6 +5,7 @@ import numpy as np
 import Levenshtein
 import textwrap
 import concurrent.futures
+import socket
 
 from core.asr_model import QuantizedWave2Vec2ForCTC
 from core.validator import VoiceValidator
@@ -19,13 +20,15 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="transformers.t
 
 
 class SecuritySystem:
-    def __init__(self, config):
+    def __init__(self, config, remote=False):
         self.model = QuantizedWave2Vec2ForCTC(**config["model"])
 
         self.faiss_database = FaissDatabase(**config["faiss_db"])
         self.user_database = UserDatabase(**config["sqlite_db"])
 
         self.VoiceValidator = VoiceValidator(self.faiss_database)
+
+        self.get_voice_input = self.get_voice_input_remote if remote else self.get_voice_input_local
 
         self.passphrase_threshold = 0.33
 
@@ -120,7 +123,7 @@ class SecuritySystem:
 
         self.user_database.close()
 
-    def get_voice_input(self, prompt: str, duration: float = 5.0, sample_rate: int = 16000):
+    def get_voice_input_local(self, prompt: str, duration: float = 5.0, sample_rate: int = 16000):
         """
         Record audio input from the user.
 
@@ -152,6 +155,29 @@ class SecuritySystem:
             return audio_data_int16.squeeze()
         except Exception as e:
             logger.error(f"Error while recording audio: {e}")
+            return None
+        
+    def get_voice_input_remote(self, prompt: str, duration: float = 5.0, sample_rate: int = 16000):
+        logger.info(prompt)
+
+        mac_ip = "10.10.229.27"
+        mac_port = 12345
+
+        logger.info(f"Connecting to Mac microphone at {mac_ip}:{mac_port}")
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((mac_ip, mac_port))
+
+            audio_size = int(duration * sample_rate)
+            audio_data = sock.recv(audio_size * 2)
+            sock.close()
+
+            audio_data = np.frombuffer(audio_data, dtype=np.int16)
+            logger.info("Audio received.")
+            return audio_data
+        except Exception as e:
+            logger.error(f"Error while receiving audio from Mac: {e}")
             return None
 
     def validate_passphrase(self, input_passphrase, stored_passphrase):
